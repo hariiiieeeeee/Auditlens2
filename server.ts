@@ -33,7 +33,7 @@ async function startServer() {
   }
 
   server.listen(PORT, HOST, () => {
-    console.log(`[AuditLens] Server running at http://${HOST}:${PORT} (${isProd ? 'production' : 'development'})`);
+    console.log(`[AuditLens] Server running at http://localhost:${PORT} (${isProd ? 'production' : 'development'})`);
   });
 }
 
