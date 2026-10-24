@@ -100,4 +100,5 @@ Demo inputs include sample invoices and financial documents containing both vali
 PRESENTATION LINK: https://www.canva.com/design/DAHYv4yDrHw/238S75ZOP9q-HTyKM6FJSg/edit
 
 live demo link: https://auditlens2.vercel.app/
+demo recorded video link: https://www.loom.com/share/c6211d4153754de7bc79b8cd0130cc1d
 
