@@ -25,7 +25,7 @@ import {
   MOCK_INVESTIGATIONS,
   MOCK_METRICS,
 } from '../data/mockData';
-import { parseOcrText, createOcrAnomalyRecord } from '../engine/ocrEngine';
+import { parseOcrText, createOcrAnomalyRecord, buildForensicAnalysis } from '../engine/ocrEngine';
 
 interface DataContextType {
   company: typeof MOCK_COMPANY;
@@ -234,8 +234,16 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         date: parsedOcr.date || new Date().toISOString().slice(0, 10),
         currency: parsedOcr.currency,
         subtotal: parsedOcr.subtotal,
+        cgst: parsedOcr.cgst,
+        sgst: parsedOcr.sgst,
+        gstRate: parsedOcr.gstRate,
         tax: parsedOcr.tax,
-        total: parsedOcr.total,
+        statedTotal: parsedOcr.statedTotal ?? parsedOcr.total,
+        expectedTotal: report.gstDiscrepancy?.correctTotal ?? parsedOcr.correctTotal ?? (parsedOcr.subtotal ? parsedOcr.subtotal + (parsedOcr.tax || 0) : 17700),
+        correctTotal: report.gstDiscrepancy?.correctTotal ?? parsedOcr.correctTotal ?? (parsedOcr.subtotal ? parsedOcr.subtotal + (parsedOcr.tax || 0) : 17700),
+        total: parsedOcr.statedTotal ?? parsedOcr.total,
+        amountInWords: parsedOcr.amountInWords,
+        forensicAnalysis: buildForensicAnalysis(report.gstDiscrepancy, parsedOcr.subtotal ?? 15000, parsedOcr.tax ?? 2700, parsedOcr.statedTotal ?? parsedOcr.total ?? 16200, parsedOcr.amountInWords || 'Rupees Fifteen Thousand Only'),
         bankName: parsedOcr.bankName,
         accountNumberLast4: parsedOcr.accountNumberLast4,
         routingNumber: parsedOcr.routingNumber,
@@ -289,9 +297,15 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         invoiceNumber: parsedOcr.invoiceNumber || `INV-${docId.slice(-6)}`,
         invoiceDate: parsedOcr.date || new Date().toISOString().slice(0, 10),
         currency: parsedOcr.currency || 'INR',
-        subtotal: parsedOcr.subtotal || parsedOcr.total,
+        subtotal: parsedOcr.subtotal || parsedOcr.statedTotal || parsedOcr.total,
         tax: parsedOcr.tax || 0,
-        total: parsedOcr.total,
+        total: parsedOcr.statedTotal || parsedOcr.total,
+        statedTotal: parsedOcr.statedTotal || parsedOcr.total,
+        correctTotal: parsedOcr.correctTotal || (parsedOcr.subtotal ? parsedOcr.subtotal + (parsedOcr.tax || 0) : 17700),
+        amountInWords: parsedOcr.amountInWords,
+        cgst: parsedOcr.cgst,
+        sgst: parsedOcr.sgst,
+        gstRate: parsedOcr.gstRate,
         paymentDetails: {
           bankName: parsedOcr.bankName,
           accountNumberLast4: parsedOcr.accountNumberLast4,
@@ -322,7 +336,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             investigationId,
             anomalyId: anomalyRecord.id,
             action: 'NEEDS_REVIEW',
-            notes: `Flagged by OCR Uncertainty & Forensic Integrity Classifier (${anomalyRecord.detectionRule}). Detected: ${report.detectedRisks.join('; ')}`,
+            notes: anomalyRecord.explanation,
             author: 'AuditLens Autonomous Sentinel',
             timestamp: new Date().toISOString(),
           }

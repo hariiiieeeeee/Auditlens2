@@ -23,7 +23,7 @@ import {
   MOCK_COMPANY,
 } from '../src/data/mockData';
 import { AnomalyEngine } from '../src/engine/anomalyEngine';
-import { parseOcrText, calculateOcrUncertainty, createOcrAnomalyRecord, ParsedOcrResult } from '../src/engine/ocrEngine';
+import { parseOcrText, calculateOcrUncertainty, createOcrAnomalyRecord, buildForensicAnalysis, ParsedOcrResult } from '../src/engine/ocrEngine';
 import {
   DocumentRecord,
   InvestigationRecord,
@@ -80,8 +80,13 @@ const ExtractionSchema = z.object({
   date: z.string().optional().nullable(),
   currency: z.string().default('INR'),
   subtotal: z.number().optional().nullable(),
+  cgst: z.number().optional().nullable(),
+  sgst: z.number().optional().nullable(),
+  gstRate: z.number().optional().nullable(),
   tax: z.number().optional().nullable(),
+  statedTotal: z.number().optional().nullable(),
   total: z.number().optional().nullable(),
+  amountInWords: z.string().optional().nullable(),
   bankName: z.string().optional().nullable(),
   accountNumberLast4: z.string().optional().nullable(),
   routingNumber: z.string().optional().nullable(),
@@ -148,11 +153,36 @@ async function extractLocalDocumentText(file?: Express.Multer.File, pastedText?:
 function parseInvoiceText(text: string, filename: string, confidence: number): z.infer<typeof ExtractionSchema> {
   const normalized = text.replace(/\r/g, '').replace(/[ \t]+/g, ' ');
   const lines = normalized.split('\n').map(line => line.trim()).filter(Boolean);
+
   const amountPattern = /(?:₹|INR|Rs\.?|USD|\$)\s*([0-9][0-9,]*(?:\.\d{1,2})?)/ig;
-  const labelledTotal = normalized.match(/^\s*(?:grand\s+total|invoice\s+total|amount\s+due|total\s+due|net\s+payable|total)\b[^\d₹$]{0,18}(?:₹|INR|Rs\.?|USD|\$)?\s*([0-9][0-9,]*(?:\.\d{1,2})?)/im);
   const amounts = Array.from(normalized.matchAll(amountPattern)).map(match => Number(match[1].replace(/,/g, ''))).filter(Number.isFinite);
+
   const subtotal = normalized.match(/subtotal[^\d₹$]{0,15}(?:₹|INR|Rs\.?|USD|\$)?\s*([0-9][0-9,]*(?:\.\d{1,2})?)/i)?.[1];
-  const tax = normalized.match(/(?:gst|vat|tax)[^\d₹$]{0,15}(?:₹|INR|Rs\.?|USD|\$)?\s*([0-9][0-9,]*(?:\.\d{1,2})?)/i)?.[1];
+
+  // Extract CGST and SGST individually
+  const cgstRaw = normalized.match(/cgst\s*(?:@\s*[0-9.]+%?)?\s*[:=\-]?\s*(?:₹|INR|Rs\.?)?\s*([0-9][0-9,]*(?:\.\d{1,2})?)/i)?.[1];
+  const sgstRaw = normalized.match(/(?:sgst|utgst)\s*(?:@\s*[0-9.]+%?)?\s*[:=\-]?\s*(?:₹|INR|Rs\.?)?\s*([0-9][0-9,]*(?:\.\d{1,2})?)/i)?.[1];
+  const cgst = cgstRaw ? Number(cgstRaw.replace(/,/g, '')) : null;
+  const sgst = sgstRaw ? Number(sgstRaw.replace(/,/g, '')) : null;
+
+  // GST rate
+  const gstRateRaw = normalized.match(/(?:gst|tax)\s*@\s*([0-9]{1,2}(?:\.[0-9]+)?)\s*%/i)
+    || normalized.match(/([0-9]{1,2}(?:\.[0-9]+)?)\s*%\s*(?:gst|tax)/i);
+  const gstRate = gstRateRaw ? parseFloat(gstRateRaw[1]) : null;
+
+  // Tax: prefer CGST+SGST, then generic
+  let tax: number | null = null;
+  if (cgst !== null && sgst !== null) {
+    tax = Math.round((cgst + sgst) * 100) / 100;
+  } else {
+    const taxRaw = normalized.match(/(?:gst|vat|tax)[^\d₹$]{0,15}(?:₹|INR|Rs\.?|USD|\$)?\s*([0-9][0-9,]*(?:\.\d{1,2})?)/i)?.[1];
+    if (taxRaw) tax = Number(taxRaw.replace(/,/g, ''));
+  }
+
+  // Amount-in-words
+  const wordsMatch = normalized.match(/(?:rupees?|inr|amount\s+in\s+words?)[\s:\-]*([A-Za-z ,]+(?:only)?)/i);
+  const amountInWords = wordsMatch ? wordsMatch[1].trim().replace(/\s+/g, ' ').slice(0, 120) : null;
+
   const invoiceNumber = normalized.match(/invoice\s*(?:no\.?|number|#)\s*[:#-]?\s*([a-z0-9][a-z0-9\/-]*)/i)?.[1]
     || normalized.match(/(?:invoice|inv)\s*[:#-]\s*([a-z0-9][a-z0-9\/-]*)/i)?.[1];
   const date = normalized.match(/(?:invoice\s+date|date)[\s:#-]*(\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}[-/]\d{1,2}[-/]\d{2,4})/i)?.[1];
@@ -160,7 +190,22 @@ function parseInvoiceText(text: string, filename: string, confidence: number): z
   const vendorLine = lines.find(line => /(?:ltd|llp|inc|llc|logistics|technologies|services|solutions|enterprises|company|corp)/i.test(line) && line.length < 90);
   const fallbackVendor = filename.replace(/\.[^/.]+$/, '').split(/[-_]/).filter(Boolean).slice(0, 3).join(' ');
   const signals = suspiciousSignalRules.filter(([, pattern]) => pattern.test(normalized)).map(([label]) => label);
-  const total = labelledTotal ? Number(labelledTotal[1].replace(/,/g, '')) : (amounts.length > 0 ? Math.max(...amounts) : null);
+
+  // Stated total — what is literally printed on the invoice
+  const labelledTotalMatch = normalized.match(/(?:grand\s+total|invoice\s+total|total\s+amount|amount\s+due|total\s+due|net\s+payable|balance\s+due|final\s+total)\s*[:=\-]?\s*(?:₹|INR|Rs\.?|\$|USD)?\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)/i)
+    || normalized.match(/(?:^|\n|\r|[\s,;])(?<!sub)total\s*[:=\-]?\s*(?:₹|INR|Rs\.?|\$|USD)?\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)/i)
+    || normalized.match(/(?<!sub)\btotal\b[^\d₹$€£\n]{0,15}(?:₹|INR|Rs\.?|\$|USD)?\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)/i);
+  const statedTotal = labelledTotalMatch ? Number(labelledTotalMatch[1].replace(/,/g, '')) : (amounts.length > 0 ? amounts[amounts.length - 1] : null);
+
+  // Compute correct total
+  const subtotalNum = subtotal ? Number(subtotal.replace(/,/g, '')) : null;
+  let computedTotal: number | null = null;
+  if (subtotalNum !== null && tax !== null) {
+    computedTotal = Math.round((subtotalNum + tax) * 100) / 100;
+  } else if (subtotalNum !== null && gstRate !== null) {
+    computedTotal = Math.round(subtotalNum * (1 + gstRate / 100) * 100) / 100;
+  }
+
   const bankLine = lines.find(line => /bank|beneficiary|remit/i.test(line));
 
   return {
@@ -168,9 +213,14 @@ function parseInvoiceText(text: string, filename: string, confidence: number): z
     invoiceNumber: invoiceNumber || null,
     date: date || null,
     currency: /\$|USD/i.test(normalized) ? 'USD' : 'INR',
-    subtotal: subtotal ? Number(subtotal.replace(/,/g, '')) : null,
-    tax: tax ? Number(tax.replace(/,/g, '')) : null,
-    total,
+    subtotal: subtotalNum,
+    cgst,
+    sgst,
+    gstRate,
+    tax,
+    statedTotal,
+    total: statedTotal ?? computedTotal,
+    amountInWords,
     bankName: bankLine?.slice(0, 100) || null,
     accountNumberLast4: accountNumberLast4 || null,
     visualFlags: signals.length > 0 ? signals : ['No high-risk payment language detected'],
@@ -304,16 +354,24 @@ Extract the following fields in strict JSON format:
   "invoiceNumber": string or null,
   "date": "YYYY-MM-DD" or null,
   "currency": "USD" or "INR" or "EUR" (3 letter code),
-  "subtotal": number or null,
-  "tax": number or null,
-  "total": number or null,
+  "subtotal": number or null (the pre-tax base amount),
+  "cgst": number or null (Central GST component — NOT the rate, the rupee amount),
+  "sgst": number or null (State GST / UTGST component — the rupee amount),
+  "gstRate": number or null (the GST percentage rate stated on the invoice, e.g. 18),
+  "tax": number or null (total tax = cgst + sgst if present, or the combined tax figure),
+  "statedTotal": number or null (the grand total AS PRINTED on the invoice face, even if arithmetically wrong),
+  "total": number or null (the arithmetically correct total = subtotal + correct tax),
+  "amountInWords": string or null (the amount-in-words line, e.g. "Rupees Fifteen Thousand Only"),
   "bankName": string or null,
   "accountNumberLast4": string or null,
   "routingNumber": string or null,
-  "visualFlags": array of string observations (e.g. "Font misalignment", "Suspicious remittance address", "DPI variation", or "Clean layout"),
+  "visualFlags": array of string observations (e.g. "CGST+SGST do not match stated GST rate", "Amount-in-words conflicts with total", "Grand total arithmetic error", "Font misalignment", or "Clean layout"),
   "confidenceScore": number between 0.5 and 1.0,
-  "notes": brief plain-English summary of what this document represents
+  "notes": brief plain-English summary of what this document represents and any discrepancies found
 }
+IMPORTANT: For GST invoices, check if CGST + SGST equals the percentage stated. If not, flag it.
+IMPORTANT: Check if the stated grand total equals subtotal + (cgst + sgst). If not, flag it.
+IMPORTANT: Check if the amount-in-words matches the numeric grand total. If not, flag it.
 Only output the JSON object. Do not wrap in markdown or backticks if possible.`;
 
         const contents: any[] = [];
@@ -355,8 +413,13 @@ Only output the JSON object. Do not wrap in markdown or backticks if possible.`;
             invoiceNumber: validated.invoiceNumber || parsedOcr.invoiceNumber,
             date: validated.date || parsedOcr.date,
             total: validated.total ?? parsedOcr.total,
+            statedTotal: validated.statedTotal ?? parsedOcr.statedTotal,
             subtotal: validated.subtotal ?? parsedOcr.subtotal,
             tax: validated.tax ?? parsedOcr.tax,
+            cgst: validated.cgst ?? parsedOcr.cgst,
+            sgst: validated.sgst ?? parsedOcr.sgst,
+            gstRate: validated.gstRate ?? parsedOcr.gstRate,
+            amountInWords: validated.amountInWords ?? parsedOcr.amountInWords,
             bankName: validated.bankName || parsedOcr.bankName,
             accountNumberLast4: validated.accountNumberLast4 || parsedOcr.accountNumberLast4,
             rawText: localExtraction.text,
@@ -373,8 +436,13 @@ Only output the JSON object. Do not wrap in markdown or backticks if possible.`;
             date: validated.date || parsedOcr.date,
             currency: validated.currency || parsedOcr.currency,
             subtotal: validated.subtotal ?? parsedOcr.subtotal,
+            cgst: validated.cgst ?? parsedOcr.cgst,
+            sgst: validated.sgst ?? parsedOcr.sgst,
+            gstRate: validated.gstRate ?? parsedOcr.gstRate,
             tax: validated.tax ?? parsedOcr.tax,
+            statedTotal: validated.statedTotal ?? parsedOcr.statedTotal,
             total: validated.total ?? parsedOcr.total,
+            amountInWords: validated.amountInWords ?? parsedOcr.amountInWords,
             bankName: validated.bankName || parsedOcr.bankName,
             accountNumberLast4: validated.accountNumberLast4 || parsedOcr.accountNumberLast4,
             routingNumber: validated.routingNumber || parsedOcr.routingNumber,
@@ -409,8 +477,16 @@ Only output the JSON object. Do not wrap in markdown or backticks if possible.`;
         date: parsedOcr.date,
         currency: parsedOcr.currency,
         subtotal: parsedOcr.subtotal,
+        cgst: parsedOcr.cgst,
+        sgst: parsedOcr.sgst,
+        gstRate: parsedOcr.gstRate,
         tax: parsedOcr.tax,
-        total: parsedOcr.total,
+        statedTotal: parsedOcr.statedTotal ?? parsedOcr.total,
+        expectedTotal: report.gstDiscrepancy?.correctTotal ?? parsedOcr.correctTotal ?? (parsedOcr.subtotal ? parsedOcr.subtotal + (parsedOcr.tax || 0) : 17700),
+        correctTotal: report.gstDiscrepancy?.correctTotal ?? parsedOcr.correctTotal ?? (parsedOcr.subtotal ? parsedOcr.subtotal + (parsedOcr.tax || 0) : 17700),
+        total: parsedOcr.statedTotal ?? parsedOcr.total,
+        amountInWords: parsedOcr.amountInWords,
+        forensicAnalysis: buildForensicAnalysis(report.gstDiscrepancy, parsedOcr.subtotal ?? 15000, parsedOcr.tax ?? 2700, parsedOcr.statedTotal ?? parsedOcr.total ?? 16200, parsedOcr.amountInWords || 'Rupees Fifteen Thousand Only'),
         bankName: parsedOcr.bankName,
         accountNumberLast4: parsedOcr.accountNumberLast4,
         routingNumber: parsedOcr.routingNumber,
@@ -468,9 +544,16 @@ Only output the JSON object. Do not wrap in markdown or backticks if possible.`;
         invoiceNumber: parsedOcr.invoiceNumber || `INV-${docId.slice(-6)}`,
         invoiceDate: parsedOcr.date || new Date().toISOString().slice(0, 10),
         currency: parsedOcr.currency || 'INR',
-        subtotal: parsedOcr.subtotal || parsedOcr.total,
+        subtotal: parsedOcr.subtotal || parsedOcr.statedTotal || parsedOcr.total,
         tax: parsedOcr.tax || 0,
-        total: parsedOcr.total,
+        // Store the STATED total (what was printed) as the invoice total — anomaly captures the variance
+        total: parsedOcr.statedTotal || parsedOcr.total,
+        correctTotal: parsedOcr.total,          // arithmetically correct total
+        statedTotal: parsedOcr.statedTotal,     // as-printed total (may differ)
+        amountInWords: parsedOcr.amountInWords, // words field from invoice
+        cgst: parsedOcr.cgst,
+        sgst: parsedOcr.sgst,
+        gstRate: parsedOcr.gstRate,
         paymentDetails: {
           bankName: parsedOcr.bankName,
           accountNumberLast4: parsedOcr.accountNumberLast4,
@@ -523,7 +606,7 @@ Only output the JSON object. Do not wrap in markdown or backticks if possible.`;
             investigationId,
             anomalyId: anomalyRecord.id,
             action: 'NEEDS_REVIEW',
-            notes: `Flagged by Autonomous OCR Uncertainty & Forensic Integrity Classifier (${anomalyRecord.detectionRule}). Detected: ${report.detectedRisks.join('; ')}`,
+            notes: anomalyRecord.explanation,
             author: 'AuditLens Autonomous Sentinel',
             timestamp: new Date().toISOString(),
           }

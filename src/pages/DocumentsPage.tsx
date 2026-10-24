@@ -190,6 +190,11 @@ export const DocumentsPage: React.FC = () => {
                       {fields.total != null
                         ? `${fields.currency || 'INR'} ${fields.total.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`
                         : '—'}
+                      {fields.expectedTotal && fields.total && fields.expectedTotal !== fields.total && (
+                        <span className="block text-[10px] text-red-600 font-semibold font-mono">
+                          Expected ${fields.currency || 'INR'} ${fields.expectedTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                        </span>
+                      )}
                     </td>
 
                     <td className="py-3.5 px-4 text-charcoal-600">
@@ -308,6 +313,38 @@ export const DocumentsPage: React.FC = () => {
                   </div>
                 )}
 
+                {/* 3 Primary Forensic Reasons Breakdown */}
+                {fields.forensicAnalysis?.mainReasons && fields.forensicAnalysis.mainReasons.length > 0 && (
+                  <div className="p-3.5 rounded-xl border border-red-300 bg-red-50/70 space-y-2">
+                    <div className="flex items-center justify-between pb-1.5 border-b border-red-200">
+                      <span className="text-xs font-bold text-red-900 flex items-center gap-1.5 uppercase tracking-wider">
+                        <AlertTriangle className="w-3.5 h-3.5 text-red-600" />
+                        Key Forensic Evidence & Discrepancies
+                      </span>
+                      {fields.expectedTotal && fields.total && (
+                        <span className="text-[10px] font-mono font-bold text-red-800 bg-red-100 px-2 py-0.5 rounded border border-red-200">
+                          Shortfall: {fields.currency || 'INR'} {Math.abs(fields.expectedTotal - fields.total).toLocaleString('en-IN')}
+                        </span>
+                      )}
+                    </div>
+                    <div className="space-y-1.5">
+                      {fields.forensicAnalysis.mainReasons.map((reason: any, rIdx: number) => (
+                        <div key={reason.id || rIdx} className="p-2 rounded bg-white border border-red-200 text-xs">
+                          <div className="flex items-center gap-1.5 font-bold text-red-900 mb-0.5">
+                            <span className="w-4 h-4 rounded-full bg-red-200 text-red-800 text-[10px] flex items-center justify-center font-bold">
+                              {rIdx + 1}
+                            </span>
+                            <span>{reason.title}</span>
+                          </div>
+                          <p className="text-charcoal-700 leading-relaxed pl-5 text-[11px]">
+                            {reason.evidence}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {/* Extracted Structured Metadata */}
                 <div className="bg-paper-50 border border-paper-300 rounded-lg p-4 space-y-3">
                   <div className="flex items-center justify-between pb-2 border-b border-paper-200">
@@ -347,14 +384,16 @@ export const DocumentsPage: React.FC = () => {
                     </div>
 
                     <div>
-                      <span className="text-charcoal-500 block">Stated Total:</span>
+                      <span className="text-charcoal-500 block">Stated Total (Printed):</span>
                       <strong className="text-forest-800 text-sm block">
                         {fields.total != null
                           ? `${fields.currency || 'INR'} ${fields.total.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`
                           : 'Unreadable'}
                       </strong>
                       <span className="text-[10px] text-charcoal-500">
-                        {arithmetic?.status === 'discrepancy'
+                        {fields.expectedTotal && fields.total && fields.expectedTotal !== fields.total
+                          ? `⚠ Expected: ${fields.currency || 'INR'} ${fields.expectedTotal.toLocaleString('en-IN')} (Variance: ${Math.abs(fields.expectedTotal - fields.total).toLocaleString('en-IN')})`
+                          : arithmetic?.status === 'discrepancy'
                           ? `⚠ Line item variance: ${arithmetic.discrepancy}`
                           : arithmetic?.status === 'passed'
                           ? '✓ Reconciled with subtotal + tax'

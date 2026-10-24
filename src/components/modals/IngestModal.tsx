@@ -279,14 +279,16 @@ export const IngestModal: React.FC<IngestModalProps> = ({ isOpen, onClose }) => 
                           </span>
                         </div>
                         <div>
-                          <span className="block text-[9px] uppercase font-bold text-charcoal-400">Total Amount</span>
+                          <span className="block text-[9px] uppercase font-bold text-charcoal-400">Total Amount (Stated)</span>
                           <b className="text-forest-800 text-xs block">
                             {fields.total != null
                               ? `${fields.currency || 'INR'} ${fields.total.toLocaleString('en-IN')}`
                               : 'Unreadable'}
                           </b>
                           <span className="text-[10px] text-charcoal-500">
-                            {arithmetic?.status === 'discrepancy'
+                            {fields.expectedTotal && fields.total && fields.expectedTotal !== fields.total
+                              ? `⚠ Expected ${fields.currency || 'INR'} ${fields.expectedTotal.toLocaleString('en-IN')}`
+                              : arithmetic?.status === 'discrepancy'
                               ? `⚠ Discrepancy (${arithmetic.discrepancy})`
                               : arithmetic?.status === 'passed'
                               ? '✓ Line items balance'
@@ -320,6 +322,38 @@ export const IngestModal: React.FC<IngestModalProps> = ({ isOpen, onClose }) => 
                           }`}>
                             {report?.fieldConfidences?.remittance?.status === 'suspicious' ? '⚠ Unverified Divergence' : 'Standard'}
                           </span>
+                        </div>
+                      )}
+
+                      {/* Detailed 3 Primary Forensic Reasons Breakdown */}
+                      {fields.forensicAnalysis?.mainReasons && fields.forensicAnalysis.mainReasons.length > 0 && (
+                        <div className="mt-2.5 rounded-lg border border-red-300 bg-white p-3 space-y-2">
+                          <div className="flex items-center justify-between pb-1.5 border-b border-red-100">
+                            <span className="text-[10px] font-bold uppercase tracking-wider text-red-800 flex items-center gap-1.5">
+                              <AlertCircle className="w-3.5 h-3.5 text-red-600" />
+                              Primary Forensic Evidence ({fields.forensicAnalysis.mainReasons.length} Key Reasons)
+                            </span>
+                            {fields.expectedTotal && fields.total && (
+                              <span className="text-[10px] font-mono font-bold text-red-700 bg-red-50 px-2 py-0.5 rounded border border-red-200">
+                                Variance: {fields.currency || 'INR'} {Math.abs(fields.expectedTotal - fields.total).toLocaleString('en-IN')}
+                              </span>
+                            )}
+                          </div>
+                          <div className="space-y-1.5">
+                            {fields.forensicAnalysis.mainReasons.map((reason: any, rIdx: number) => (
+                              <div key={reason.id || rIdx} className="p-2 rounded bg-red-50/80 border border-red-200/80 text-[11px]">
+                                <div className="flex items-center gap-1.5 font-bold text-red-900 mb-0.5">
+                                  <span className="w-4 h-4 rounded-full bg-red-200 text-red-800 text-[9px] flex items-center justify-center font-bold">
+                                    {rIdx + 1}
+                                  </span>
+                                  <span>{reason.title}</span>
+                                </div>
+                                <p className="text-charcoal-700 leading-relaxed pl-5 text-[10.5px]">
+                                  {reason.evidence}
+                                </p>
+                              </div>
+                            ))}
+                          </div>
                         </div>
                       )}
 

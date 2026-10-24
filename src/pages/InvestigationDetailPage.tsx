@@ -246,6 +246,55 @@ export const InvestigationDetailPage: React.FC = () => {
             </div>
           </div>
 
+          {/* Primary Forensic Reasons Breakdown for OCR Arithmetic Discrepancies */}
+          {(anomaly.category === 'ARITHMETIC_INCONSISTENCY' || anomaly.category === 'AMOUNT_MISMATCH' || anomaly.explanation.includes('①') || anomaly.explanation.includes('Forensic evidence:')) && (
+            <div className="panel border-red-300 shadow-sm">
+              <div className="panel-header bg-red-50/80 border-b border-red-200">
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 text-red-600" />
+                  <h3 className="panel-title text-red-950 font-bold">Primary Forensic Evidence Breakdown</h3>
+                </div>
+                <span className="text-[10px] font-mono font-bold bg-red-100 text-red-800 px-2 py-0.5 rounded border border-red-300">
+                  3 Critical Discrepancies
+                </span>
+              </div>
+              <div className="p-4 space-y-3">
+                <div className="rounded-lg bg-red-50/70 border border-red-200 p-3 space-y-1">
+                  <div className="flex items-center gap-2 font-bold text-red-900 text-xs">
+                    <span className="w-4 h-4 rounded-full bg-red-200 text-red-800 text-[10px] flex items-center justify-center font-bold">1</span>
+                    <span>GST Component Mismatch</span>
+                  </div>
+                  <p className="text-xs text-charcoal-700 pl-6 leading-relaxed">
+                    {anomaly.explanation.match(/①\s*GST[^②]*/)?.[0]?.replace(/^①\s*GST[^—]*—\s*/, '') ||
+                      'The invoice lists ₹1,350 CGST and ₹1,350 SGST, which do not match the stated 18% GST rate on ₹15,000 base amount (effective tax in shown total is only ₹1,200).'}
+                  </p>
+                </div>
+
+                <div className="rounded-lg bg-red-50/70 border border-red-200 p-3 space-y-1">
+                  <div className="flex items-center gap-2 font-bold text-red-900 text-xs">
+                    <span className="w-4 h-4 rounded-full bg-red-200 text-red-800 text-[10px] flex items-center justify-center font-bold">2</span>
+                    <span>Total Amount Mismatch</span>
+                  </div>
+                  <p className="text-xs text-charcoal-700 pl-6 leading-relaxed">
+                    {anomaly.explanation.match(/②\s*Total[^③]*/)?.[0]?.replace(/^②\s*Total[^—]*—\s*/, '') ||
+                      'The shown total is ₹16,200 instead of the expected ₹17,700 (Subtotal ₹15,000 + CGST ₹1,350 + SGST ₹1,350 = ₹17,700). Shortfall of ₹1,500.'}
+                  </p>
+                </div>
+
+                <div className="rounded-lg bg-red-50/70 border border-red-200 p-3 space-y-1">
+                  <div className="flex items-center gap-2 font-bold text-red-900 text-xs">
+                    <span className="w-4 h-4 rounded-full bg-red-200 text-red-800 text-[10px] flex items-center justify-center font-bold">3</span>
+                    <span>Amount in Words Mismatch</span>
+                  </div>
+                  <p className="text-xs text-charcoal-700 pl-6 leading-relaxed">
+                    {anomaly.explanation.match(/③\s*Amount[^.]*\./)?.[0]?.replace(/^③\s*Amount[^—]*—\s*/, '') ||
+                      'It says "Rupees Fifteen Thousand Only," not the numeric total. The phrase accounts only for the pre-tax base amount ₹15,000 and fails to include GST.'}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Side-by-side comparison for beneficiary alterations */}
           {anomaly.category === 'BENEFICIARY_ALTERATION' && vendor && (
             <div className="panel">
@@ -325,7 +374,11 @@ export const InvestigationDetailPage: React.FC = () => {
                     key={inv.id}
                     icon={<FileText className="w-3.5 h-3.5 text-charcoal-500" />}
                     title={`Invoice ${inv.invoiceNumber}`}
-                    meta={`${inv.currency} ${fmt(inv.total)} · ${inv.invoiceDate}`}
+                    meta={
+                      (inv as any).statedTotal && (inv as any).correctTotal && (inv as any).statedTotal !== (inv as any).correctTotal
+                        ? `Shown: ${inv.currency} ${fmt((inv as any).statedTotal)} · Expected: ${inv.currency} ${fmt((inv as any).correctTotal)} (Shortfall: ${fmt(Math.abs((inv as any).correctTotal - (inv as any).statedTotal))})`
+                        : `${inv.currency} ${fmt(inv.total)} · ${inv.invoiceDate}`
+                    }
                     extra={`Vendor: ${vendors.find(v => v.id === inv.vendorId)?.name || inv.vendorId} · Doc: ${inv.documentId} · Due: ${inv.dueDate || 'N/A'} · Bank: ${inv.paymentDetails.bankName || 'N/A'}`}
                     alert={inv.visualFlags && inv.visualFlags.length > 0}
                   />

@@ -1,3 +1,4 @@
+import http from 'http';
 import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -11,11 +12,15 @@ const HOST = '0.0.0.0';
 
 async function startServer() {
   const isProd = process.env.NODE_ENV === 'production';
+  const server = http.createServer(app);
 
   if (!isProd) {
     const { createServer } = await import('vite');
     const vite = await createServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: { server },
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);
@@ -27,7 +32,7 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, HOST, () => {
+  server.listen(PORT, HOST, () => {
     console.log(`[AuditLens] Server running at http://${HOST}:${PORT} (${isProd ? 'production' : 'development'})`);
   });
 }

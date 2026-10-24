@@ -470,27 +470,76 @@ export class AnomalyEngine {
           ? `Duplicate Scanned Invoice Detected: ${invNum}`
           : `OCR Extraction Uncertainty Flagged: ${invNum}`;
 
-        const riskSummary = uncertaintyReport?.detectedRisks?.join('; ') ||
-          flags.join('; ') ||
-          'Low OCR character confidence and unverified payment parameters';
+        // Build evidence-rich explanation using structured GST discrepancy data if available
+        const gd = uncertaintyReport?.gstDiscrepancy;
+        let explanation = `Multimodal forensic OCR evaluated this document with ${Math.round(confidence * 100)}% confidence. `;
+        const evidencePoints: string[] = [];
+
+        if (gd) {
+          if (gd.taxVariance !== null && gd.taxVariance > 0.5 && gd.statedRatePct !== null) {
+            const cgstStr = gd.cgst !== null ? `CGST ₹${gd.cgst.toLocaleString('en-IN')}` : null;
+            const sgstStr = gd.sgst !== null ? `SGST ₹${gd.sgst.toLocaleString('en-IN')}` : null;
+            const componentStr = [cgstStr, sgstStr].filter(Boolean).join(' + ');
+            evidencePoints.push(
+              `① GST Rate Mismatch — Invoice states ${gd.statedRatePct}% GST on ₹${gd.taxableAmount?.toLocaleString('en-IN')}, ` +
+              `expected tax ₹${gd.expectedTax?.toLocaleString('en-IN')}; invoice shows ${componentStr} = ₹${gd.invoiceTax?.toLocaleString('en-IN')} ` +
+              `(shortfall ₹${gd.taxVariance.toLocaleString('en-IN')}).`
+            );
+          }
+          if (gd.totalVariance !== null && gd.totalVariance > 0.5) {
+            evidencePoints.push(
+              `② Total Mismatch — Stated total ₹${gd.statedTotal?.toLocaleString('en-IN')} vs. correct ` +
+              `₹${gd.taxableAmount?.toLocaleString('en-IN')} + ₹${(gd.expectedTax ?? gd.invoiceTax ?? 0).toLocaleString('en-IN')} = ` +
+              `₹${gd.correctTotal?.toLocaleString('en-IN')} (under-reported by ₹${gd.totalVariance.toLocaleString('en-IN')}).`
+            );
+          }
+          if (gd.wordsVsNumericConflict && gd.amountInWords) {
+            evidencePoints.push(
+              `③ Amount-in-Words Conflict — Invoice reads "${gd.amountInWords}" which matches only ` +
+              `₹${gd.taxableAmount?.toLocaleString('en-IN')} (subtotal), not the correct payable ₹${gd.correctTotal?.toLocaleString('en-IN')}.`
+            );
+          }
+        }
+
+        if (evidencePoints.length > 0) {
+          explanation += 'Forensic evidence: ' + evidencePoints.join(' ');
+        } else {
+          const riskSummary = uncertaintyReport?.detectedRisks?.join('; ') ||
+            flags.join('; ') ||
+            'Low OCR character confidence and unverified payment parameters';
+          explanation += `Key observations: ${riskSummary}.`;
+        }
+
+        const amountInDispute = gd?.totalVariance || discrepancy || total;
+
+        const verificationList: string[] = [
+          'Inspect the original high-resolution scan against each parsed field.',
+        ];
+        if (gd?.statedRatePct) {
+          verificationList.push(
+            `Confirm CGST and SGST are each ${(gd.statedRatePct / 2).toFixed(1)}% of ₹${gd.taxableAmount?.toLocaleString('en-IN')} ` +
+            `(₹${((gd.taxableAmount ?? 0) * gd.statedRatePct / 200).toLocaleString('en-IN')} each).`
+          );
+        }
+        if (gd?.wordsVsNumericConflict) {
+          verificationList.push('Request a corrected invoice where the amount-in-words matches the numeric grand total.');
+        }
+        verificationList.push(`Confirm vendor identity for '${vendorName}' via verified out-of-band contact.`);
+        verificationList.push('Verify bank remittance details in master ERP before authorizing payment.');
 
         results.push({
           id: `anom-ocr-${doc.id}`,
           title,
           category,
           severity: (uncertaintyReport?.uncertaintyLevel === 'high' || isBeneficiary) ? 'high' : 'medium',
-          amountInDispute: discrepancy || total,
+          amountInDispute,
           currency: fields?.currency || 'INR',
-          explanation: `Multimodal forensic OCR evaluated this document with ${Math.round(confidence * 100)}% confidence. Key observations: ${riskSummary}. Stored document: ${doc.filename}.`,
+          explanation,
           supportingRecordIds: [doc.id],
           detectionMethod: 'Multimodal OCR Uncertainty & Field Integrity Classifier (Rule #9)',
           detectionRule: isArithmetic ? 'RULE_INVOICE_LINE_ITEM_ARITHMETIC' : 'RULE_OCR_EXTRACTION_UNCERTAINTY',
           uncertainty: `Optical character recognition flagged uncertainty in document structure, values, or remittance authenticity. Manual verification of original scan required.`,
-          verificationChecklist: [
-            'Inspect high-resolution document scan against parsed fields.',
-            `Confirm vendor identity for '${vendorName}' via verified out-of-band contact.`,
-            'Verify bank remittance account details against master ERP records before authorization.'
-          ],
+          verificationChecklist: verificationList,
           status: 'NEEDS_REVIEW',
           createdAt: doc.uploadDate || new Date().toISOString(),
           updatedAt: new Date().toISOString(),
